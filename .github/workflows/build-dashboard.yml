@@ -1,0 +1,80 @@
+name: KODi.Debil Android – Dashboard + Profil
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kodidebil-dashboard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Android SDK einrichten und APK bauen
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: JDK 17 einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK einrichten
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+
+      - name: Android SDK Plattform und Build Tools installieren
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          yes | sdkmanager --licenses >/dev/null
+
+      - name: Gradle 8.13 bereitstellen
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Projektstruktur prüfen
+        run: |
+          test -f settings.gradle
+          test -f dashboard-app/build.gradle
+          test -f scripts/package-profile.sh
+
+      - name: Profilpakete erstellen
+        run: bash scripts/package-profile.sh
+
+      - name: Dashboard APK bauen
+        run: gradle --no-daemon --stacktrace clean :dashboard-app:assembleDebug
+
+      - name: APK kopieren und verifizieren
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp dashboard-app/build/outputs/apk/debug/dashboard-app-debug.apk dist/KODi.Debil-Dashboard-debug.apk
+          cp dashboard-app/build/outputs/apk/debug/dashboard-app-debug.apk dist/KODi.Debil-Dashboard.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose dist/KODi.Debil-Dashboard-debug.apk
+          find dist -maxdepth 2 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
+
+      - name: APK und Profil als Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: KODi.Debil-Android-APK-und-Profil
+          path: |
+            dist/KODi.Debil-Dashboard-debug.apk
+            dist/KODi.Debil-Dashboard.apk
+            dist/KODi.Debil-Profil.zip
+            dist/script.kodidebil.setup-1.0.0.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
