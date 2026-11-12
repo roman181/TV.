@@ -1,0 +1,118 @@
+name: KODi.Debil Android – Komplettpaket
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Paketversion (z. B. 1.0.0)'
+        required: true
+        default: '1.0.0'
+        type: string
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: Kodi + Dashboard + Profil
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Version bestimmen
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="${INPUT_VERSION:-1.0.0}"; fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: JDK 17 einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK einrichten
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+
+      - name: Android SDK Plattform und Build Tools installieren
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          yes | sdkmanager --licenses >/dev/null
+
+      - name: Gradle 8.13 bereitstellen
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Projektstruktur prüfen
+        run: |
+          test -f settings.gradle
+          test -f dashboard-app/build.gradle
+          test -f config/kodi-version.env
+          test -f scripts/package-profile.sh
+          test -f scripts/build-release-bundle.sh
+
+      - name: Profil und Installer paketieren
+        run: bash scripts/package-profile.sh
+
+      - name: Dashboard APK bauen
+        run: gradle --no-daemon --stacktrace clean :dashboard-app:assembleDebug
+
+      - name: Dashboard APK kopieren und verifizieren
+        run: |
+          mkdir -p dist
+          cp dashboard-app/build/outputs/apk/debug/dashboard-app-debug.apk dist/KODi.Debil-Dashboard-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose dist/KODi.Debil-Dashboard-debug.apk
+
+      - name: Offizielle Kodi APKs herunterladen
+        shell: bash
+        run: |
+          set -euo pipefail
+          source config/kodi-version.env
+          mkdir -p dist/kodi
+          curl --fail --location --retry 3 "$KODI_ARM64_URL" --output "dist/kodi/kodi-${KODI_VERSION}-${KODI_CODENAME}-arm64-v8a.apk"
+          curl --fail --location --retry 3 "$KODI_ARMV7A_URL" --output "dist/kodi/kodi-${KODI_VERSION}-${KODI_CODENAME}-armeabi-v7a.apk"
+          for apk in dist/kodi/*.apk; do unzip -t "$apk" >/dev/null; done
+
+      - name: Prüfsummen erstellen
+        run: find dist -maxdepth 2 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
+
+      - name: Release ZIP erstellen
+        run: bash scripts/build-release-bundle.sh "${{ steps.version.outputs.value }}"
+
+      - name: Build-Artefakte hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: KODi.Debil-Android-v${{ steps.version.outputs.value }}
+          path: |
+            dist/KODi.Debil-Android-Bundle-v*.zip
+            dist/KODi.Debil-Dashboard-debug.apk
+            dist/KODi.Debil-Profil.zip
+            dist/script.kodidebil.setup-1.0.0.zip
+            dist/kodi/*.apk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: GitHub Release veröffentlichen
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: KODi.Debil Android v${{ steps.version.outputs.value }}
+          generate_release_notes: true
+          files: |
+            dist/KODi.Debil-Android-Bundle-v${{ steps.version.outputs.value }}.zip
+            dist/KODi.Debil-Dashboard-debug.apk
+            dist/KODi.Debil-Profil.zip
+            dist/script.kodidebil.setup-1.0.0.zip
+            dist/kodi/*.apk
+            dist/SHA256SUMS.txt
