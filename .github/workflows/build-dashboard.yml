@@ -3,12 +3,13 @@ name: KODi.Debil Android – Dashboard + Profil
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: kodidebil-dashboard-${{ github.ref }}
@@ -88,3 +89,16 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: GitHub Release mit APK und Profil veröffentlichen
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: KODi.Debil ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/KODi.Debil-Dashboard.apk
+            dist/KODi.Debil-Dashboard-debug.apk
+            dist/KODi.Debil-Profil.zip
+            dist/script.kodidebil.setup-1.0.0.zip
+            dist/SHA256SUMS.txt
